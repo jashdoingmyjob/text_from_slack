@@ -10,11 +10,11 @@ import server_config as my_config
 # instantiate Flask class
 app = Flask(__name__)
 # tell Flask what URL should trigger function
-
 @app.route("/inbound", methods=['POST'])
 def inbound():
     # webhook coming from Twilio > Slack
     if request.method == 'POST':
+        print("In the POST if statement")
         print(request.form)
         message_body = request.form['Body']
         message_from = request.form['From']
@@ -25,10 +25,12 @@ def inbound():
             abort(404)
         # add sleep() function for 1 second for API rate limiting
         time.sleep(1)
-        client = WebClient(token=my_config.variables["apps"]["slack_Jashs-Slack-App"]["token"])
+        print("here is the channel name "+chan_name)
+        client = WebClient(token=my_config.variables["apps"]["slack_Jashs-Slack-App_bot"]["token"])
         formatted_message = message_from+": "+message_body
         # send message to Slack
         response = client.chat_postMessage(is_private=False, channel=chan_name, text=formatted_message)
+        print(response)
         return 'success', 200
 
     else:
@@ -77,55 +79,68 @@ def search_db(file_name, entity_type, value):
         return channel_name
 
 @app.route("/outbound", methods = ['POST'])
-def outbound():
-    # uses Jash's-Slack-App bot/app
-    # webhook going from Slack to Twilio
-    # don't allow requests from contact-list channel
+def onboard_or_outbound():
+    print("in onboard_or_outbound")
+     # only allow requests from contact-list channel
+    # return request.json["challenge"], 200
+    if request.json["event"]["channel"] == my_config.variables["channels"]["contact-list"]:
+        print("in the onboard if statement")
+        return onboard(request=request)
+
+        ########### trying to combine 2 endpoints into 1 ###########
     if request.json["event"]["type"] == "message":
     	# if doesn't pass validation, terminate and send 400
-        if(not(validation(func="outbound", req=request))):
-            abort(400)
-        else:
-            # print(request.json["event"])
-            # print(request.json["event"]["text"])
-            phone_to_text = search_db(file_name='db.csv', entity_type='channel', value=request.json["event"]["channel"])
-            if phone_to_text == "":
-                abort(404)
-            # use TwilioHTTPClient because the Twilio API client needs to be told how to connect to the proxy server that free accounts use to access the external Internet.
-            proxy_client = TwilioHttpClient(proxy={'http': os.environ['http_proxy'], 'https': os.environ['https_proxy']})
-            account_sid = my_config.variables["apps"]["twilio"]["account_sid"]
-            auth_token = my_config.variables["apps"]["twilio"]["auth_token"]
-            client = Client(account_sid, auth_token, http_client=proxy_client)
-            # create and send message to Twilio 
-            message = client.messages.create(
-                     body=request.json["event"]["text"],
-                     from_=my_config.variables["apps"]["twilio"]["phone_number"],
-                     to=phone_to_text
-                 )
-            return 'success', 200
+        return outbound(request=request)
+
+
+def outbound(request):
+    # send message to Twilio from Slack
+    # don't allow requests from contact-list channel to go to Twilio
+    if(not(validation(func="outbound", req=request))):
+        abort(400)
+    else:
+        # print(request.json["event"])
+        # print(request.json["event"]["text"])
+        phone_to_text = search_db(file_name='db.csv', entity_type='channel', value=request.json["event"]["channel"])
+        if phone_to_text == "":
+            abort(404)
+        # (ONLY if using pythonanywhere server) use TwilioHTTPClient because 
+        # the Twilio API client needs to be told how to connect to the proxy server 
+        # that free accounts use to access the external Internet.
+        # proxy_client = TwilioHttpClient(proxy={'http': os.environ['http_proxy'], 'https': os.environ['https_proxy']})
+        account_sid = my_config.variables["apps"]["twilio"]["account_sid"]
+        auth_token = my_config.variables["apps"]["twilio"]["auth_token"]
+        #client = Client(account_sid, auth_token, http_client=proxy_client)
+        client = Client(account_sid, auth_token)
+        # create and send message to Twilio 
+        message = client.messages.create(
+                    body=request.json["event"]["text"],
+                    from_=my_config.variables["apps"]["twilio"]["phone_number"],
+                    to=phone_to_text
+                )
         return 'success', 200
 
-@app.route("/onboard", methods = ['POST'])
-def onboard():
-    # used by our customer to add end users to phone_book.
-    # phone_book is used to determine what channel to send slack messages to, who is sending slack message, slack webhook URL
-    # message from API call for onboarding
-    # uses onboard-enduser Slack bot/app
-    # only allow requests from contact-list channel
-    if request.json["event"]["channel"] == my_config.variables["channels"]["contact-list"]:
-        print("in the onboard endpoint")
-        message = request.json["event"]["text"].split(" ")
-        chan_name = message[0]
-        phone_num = "+"+message[1]
-        check_name = search_db(file_name='db.csv', entity_type='phone_number', value=phone_num)
-        if check_name != "":
-            abort(404)
-        client = WebClient(token=my_config.variables["apps"]["slack_onboard-enduser"]["token"])
-        response = client.conversations_create(is_private=False, name=chan_name)
-        # print(response)
-        with open('db.csv', 'a+', newline='') as csvfile_write:
-            phone_book_write = writer(csvfile_write)
-            phone_book_write.writerow([phone_num,chan_name,response["channel"]["id"]])
+def onboard(request):
+#     # used by our customer to add end users to phone_book.
+#     # phone_book is used to determine what channel to send slack messages to, who is sending slack message, slack webhook URL
+#     # message from API call for onboarding
+#     # uses onboard-enduser Slack bot/app
+#     # only allow requests from contact-list channel
+    print("in the onboard endpoint")
+    message = request.json["event"]["text"].split(" ")
+    chan_name = message[0]
+    phone_num = "+"+message[1]
+    check_name = search_db(file_name='db.csv', entity_type='phone_number', value=phone_num)
+    if check_name != "":
+        abort(404)
+    user_client = WebClient(token=my_config.variables["apps"]["slack_Jashs-Slack-App_user"]["token"])
+    bot_client = WebClient(token=my_config.variables["apps"]["slack_Jashs-Slack-App_bot"]["token"])
+    response = user_client.conversations_create(is_private=False, name=chan_name)
+    #bot_client.conversations_join(channel=response["id"])
+    print("here is response: "+str(response))
+    with open('db.csv', 'a+', newline='') as csvfile_write:
+        phone_book_write = writer(csvfile_write)
+        phone_book_write.writerow([phone_num,chan_name,response["channel"]["id"]])
 
 
     return 'success', 200
